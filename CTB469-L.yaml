@@ -1,0 +1,109 @@
+---
+- hosts: digitalocean
+
+  vars:
+    do_token: 52d7531580424729663ac8d207657fbde47700549c872ad2e0b0ea877a0ca2e6
+    droplets:
+    - llrc-droplet1
+    - llrc-droplet2
+
+  tasks:
+  - name: ensure ssh key exists
+    user: >
+      name={{ ansible_user_id }}
+      generate_ssh_key=yes
+      ssh_key_file=.ssh/id_ed25519
+
+  - name: ensure key exists at DigitalOcean
+    digital_ocean: >
+      state=present
+      command=ssh
+      name=ansible_ssh_key
+      ssh_pub_key={{ lookup('file', '~/.ssh/id_ed25519.pub') }}
+      api_token={{ do_token }}
+    register: my_ssh_key
+
+  - name: ensure test droplets exists
+    digital_ocean: >
+      state=present
+      command=droplet
+      name={{ item }}
+      unique_name=yes
+      size_id=512mb
+      region_id=nyc1
+      image_id=CentOS-7-x64
+      ssh_key_ids={{ my_ssh_key.ssh_key.id }}
+      api_token={{ do_token }}
+    with_items: "{{ droplets }}"
+    register: droplet_details
+
+  - pause:
+      seconds: 30
+
+  - name: Add IP
+    add_host:
+      name: "{{ item.droplet.ip_address }}"
+      groups: droplets
+    with_items: "{{ droplet_details.results }}"
+
+  - name: Show details
+    debug: msg="IP is {{ item.droplet.ip_address }}"
+    with_items: "{{ droplet_details.results }}"
+ 
+#installation of apache and databse
+
+- hosts: droplets
+
+  tasks:
+
+  - name: install mariadb-server
+    yum: name=mariadb-server state=latest
+
+  - name: install latest mariadb
+    yum: name=mariadb state=latest
+
+  - name: install latest php
+    yum: name=php state=latest
+
+  - name: install latest php-mysql
+    yum: name=php-mysql state=latest
+
+  - name: Start mariadb and enable it on boot
+    service: name=mariadb state=started enabled=yes
+
+  - name: Restart Apache
+    service: name=httpd state=restarted
+
+  - name: copy application code to document root
+    template: src=/root/index.txt dest=/var/www/html/index.php
+
+  - name: Restart Apache
+    service: name=httpd state=restarted
+
+#installation of wordpress
+  - pause:
+      seconds: 10
+  
+  - name: download wordpress.tar.gz
+    get_url:
+      url: http://wordpress.org/latest.tar.gz
+      dest: /var/www/html/wordpresspony.tar.gz
+
+  - name: unzip wordpress
+    unarchive: src=/var/www/html/wordpresspony.tar.gz dest=/var/www/html/ copy=no
+
+  - name: copy wordpress config
+    template: src=/root/config.txt dest=/var/www/html/wp-config.php
+
+#configuration of database
+  - pause:
+      seconds: 10
+
+  - name: Install the Python MySQLB module
+    yum: name=MySQL-python state=present
+
+  - name: Create database user
+    mysql_user: user=wordpress1 password=fullsail priv=*.*:ALL state=present
+
+  - name: Create database
+    mysql_db: db=wordpress state=present
